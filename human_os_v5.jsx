@@ -204,18 +204,19 @@ function _getAC() {
 }
 
 // Call this from ANY user-gesture handler to pre-unlock iOS audio.
+// Always plays a silent buffer + calls resume regardless of current state —
+// iOS needs this pattern on EVERY fresh gesture that precedes AudioContext use.
 function _unlockAudio() {
   const ctx = _getAC();
   if (!ctx) return;
-  if (ctx.state === "suspended") {
-    // Play a 1-sample silent buffer — the minimum iOS needs to see.
+  try {
     const buf = ctx.createBuffer(1, 1, ctx.sampleRate);
     const src = ctx.createBufferSource();
     src.buffer = buf;
     src.connect(ctx.destination);
     src.start(0);
-    ctx.resume().catch(() => {});
-  }
+  } catch(e){}
+  ctx.resume().catch(() => {});
 }
 
 class AudioEngine {
@@ -225,10 +226,13 @@ class AudioEngine {
     if (this.running) return;
     this.bc=carrier; this.bb=beat;
     try {
-      // Reuse the pre-unlocked shared context; fall back to a new one.
       this.ctx = _getAC();
       if (!this.ctx) return;
-      // All node wiring is synchronous within the user-gesture call stack.
+      // ── FIX: resume() FIRST, before any heavy computation ────────────────
+      // iOS Safari kills the gesture-scope window if we do CPU work first.
+      // Calling resume() immediately keeps us firmly inside the gesture scope.
+      this.ctx.resume().catch(e=>console.warn("audio resume:",e));
+      // ── Fast synchronous node setup (oscillators only) ───────────────────
       this.mg=this.ctx.createGain(); this.mg.gain.value=vol; this.mg.connect(this.ctx.destination);
       const mer=this.ctx.createChannelMerger(2);
       mer.connect(this.mg);
@@ -237,19 +241,23 @@ class AudioEngine {
       this.gL.connect(mer,0,0); this.gR.connect(mer,0,1);
       this.oL=this.ctx.createOscillator(); this.oL.type="sine"; this.oL.frequency.value=carrier; this.oL.connect(this.gL); this.oL.start();
       this.oR=this.ctx.createOscillator(); this.oR.type="sine"; this.oR.frequency.value=carrier+beat; this.oR.connect(this.gR); this.oR.start();
-      try {
-        // 2 s noise loop (halved from 4 s to reduce gesture-scope CPU spike on mobile).
-        const sr=this.ctx.sampleRate; const nb=this.ctx.createBuffer(2,Math.floor(sr*2),sr);
-        for (let ch=0;ch<2;ch++) { const d=nb.getChannelData(ch); let b0=0,b1=0,b2=0,b3=0,b4=0,b5=0,b6=0; for (let i=0;i<d.length;i++){const w=Math.random()*2-1;b0=.99886*b0+w*.0555179;b1=.99332*b1+w*.0750759;b2=.969*b2+w*.153852;b3=.8665*b3+w*.3104856;b4=.55*b4+w*.5329522;b5=-.7616*b5-w*.016898;d[i]=(b0+b1+b2+b3+b4+b5+b6+w*.5362)/7*.07;b6=w*.115926;} }
-        this.ns=this.ctx.createBufferSource(); this.ns.buffer=nb; this.ns.loop=true;
-        this.ng=this.ctx.createGain(); this.ng.gain.value=0.04;
-        this.ns.connect(this.ng); this.ng.connect(this.mg); this.ns.start();
-      } catch(e){ console.warn("noise:",e); }
       this.running=true;
-      if (this.ctx.state!=="running") {
-        this.ctx.resume().catch(e=>console.warn("audio resume:",e));
-      }
-    } catch(e){ console.warn("audio:",e); }
+      // ── Defer heavy noise buffer — must NOT run in gesture scope ─────────
+      // Generating ~88 k samples takes 30–80 ms on mobile and would push
+      // ctx.resume() outside the iOS gesture window if done synchronously.
+      setTimeout(() => this._addNoise(), 120);
+    } catch(e){ console.warn("audio start:",e); }
+  }
+
+  _addNoise() {
+    if (!this.running||!this.ctx||!this.mg) return;
+    try {
+      const sr=this.ctx.sampleRate; const nb=this.ctx.createBuffer(2,Math.floor(sr*2),sr);
+      for (let ch=0;ch<2;ch++){const d=nb.getChannelData(ch);let b0=0,b1=0,b2=0,b3=0,b4=0,b5=0,b6=0;for(let i=0;i<d.length;i++){const w=Math.random()*2-1;b0=.99886*b0+w*.0555179;b1=.99332*b1+w*.0750759;b2=.969*b2+w*.153852;b3=.8665*b3+w*.3104856;b4=.55*b4+w*.5329522;b5=-.7616*b5-w*.016898;d[i]=(b0+b1+b2+b3+b4+b5+b6+w*.5362)/7*.07;b6=w*.115926;}}
+      this.ns=this.ctx.createBufferSource(); this.ns.buffer=nb; this.ns.loop=true;
+      this.ng=this.ctx.createGain(); this.ng.gain.value=0.04;
+      this.ns.connect(this.ng); this.ng.connect(this.mg); this.ns.start();
+    } catch(e){ console.warn("noise:",e); }
   }
 
   onBreath(phase, rmssd=0) {
@@ -737,6 +745,9 @@ export default function HumanOS() {
   }
 
   function startSession() {
+    // Unlock audio FIRST — this call is inside the button onClick gesture scope.
+    // iOS requires resume() to be called before any computation within the gesture.
+    _unlockAudio();
     if (!pkgsRef.current) pkgsRef.current=gd.pkgs;
     const adp=getAdaptive(rmssdRef.current);
     setAdaptive(adp); adaptRef.current=adp;
@@ -744,7 +755,7 @@ export default function HumanOS() {
     seenLines.current=new Set(); toastSent.current=false; setAudioOk(false);
     audioRef.current=new AudioEngine();
     audioRef.current.start(adp.carrier, adp.beat, vol);
-    setTimeout(()=>setAudioOk(audioRef.current?.running&&audioRef.current?.ctx?.state==="running"), 600);
+    setTimeout(()=>setAudioOk(audioRef.current?.running&&audioRef.current?.ctx?.state==="running"), 800);
     startBreath(adp.breathSeq);
     const t0=Date.now();
     tickRef.current=setInterval(()=>{
@@ -1000,7 +1011,20 @@ export default function HumanOS() {
                 <input type="range" min={0} max={0.4} step={0.01} value={vol} onChange={e=>setVol(+e.target.value)} style={{width:48,accentColor:gd.color,cursor:"pointer"}}/>
               </div>
               {!audioOk && (
-                <button onClick={()=>{if(audioRef.current?.ctx){audioRef.current.ctx.resume().then(()=>setAudioOk(true));}else{audioRef.current=new AudioEngine();audioRef.current.start(adaptive.carrier,adaptive.beat,vol);setTimeout(()=>setAudioOk(audioRef.current?.running??false),350);}}} style={{background:"transparent",border:`1px solid ${gd.color}55`,color:gd.color,padding:"4px 9px",borderRadius:5,fontFamily:"monospace",fontSize:8,letterSpacing:".1em",cursor:"pointer",animation:"blink 2s step-end infinite"}}>🔊 звук</button>
+                <button onClick={()=>{
+                  // Unlock first — we're inside a button click = gesture scope
+                  _unlockAudio();
+                  if (audioRef.current?.running) {
+                    // Engine already running but iOS suspended context; just resume
+                    audioRef.current.ctx?.resume().then(()=>setAudioOk(true)).catch(()=>{});
+                  } else {
+                    // Restart audio engine entirely
+                    if (audioRef.current) audioRef.current.stop();
+                    audioRef.current=new AudioEngine();
+                    audioRef.current.start(adaptive.carrier,adaptive.beat,vol);
+                    setTimeout(()=>setAudioOk(audioRef.current?.running??false),500);
+                  }
+                }} style={{background:"transparent",border:`1px solid ${gd.color}55`,color:gd.color,padding:"4px 9px",borderRadius:5,fontFamily:"monospace",fontSize:8,letterSpacing:".1em",cursor:"pointer",animation:"blink 2s step-end infinite"}}>🔊 звук</button>
               )}
             </div>
           </div>

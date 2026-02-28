@@ -519,6 +519,68 @@ function Marquee({ text, color, speed=38, direction="rtl" }) {
   );
 }
 
+// ─── VerticalMarquee ──────────────────────────────────────────────────────────
+// direction: "up" (bottom→top, right side) | "down" (top→bottom, left side)
+// Speed is modulated by φ×π algorithm, synchronized with breath phase & audio.
+const VM_PHASE_MUL = { inhale: PHI, hold: 1.0, exhale: PHI * PHI, rest: 1 / PHI };
+const VM_BASE_SPD  = 26; // px/s base scroll speed
+const VM_ITEM_H    = 16; // px per line
+
+function VerticalMarquee({ lines, color, direction = "up", breathRef, beatHz = 0.1, carrier = 528, height = 320 }) {
+  const posRef  = useRef(0);
+  const prevRef = useRef(performance.now());
+  const rafRef  = useRef(null);
+  const [, setTick] = useState(0);
+
+  const totalH = (lines?.length || 0) * VM_ITEM_H;
+
+  useEffect(() => {
+    if (totalH === 0) return;
+    function frame(now) {
+      const dt = (now - prevRef.current) / 1000;
+      prevRef.current = now;
+      const t = now / 1000;
+      const phase    = breathRef?.current?.phase || "rest";
+      const phaseMul = VM_PHASE_MUL[phase] || 1;
+      // φ-tide: period ≈ φ s (~1.618 s golden wave)
+      const phiWave  = 0.12 * Math.sin(TAU * t / PHI);
+      // π-wave: beat sub-harmonic filtered through π×φ
+      const piWave   = 0.09 * Math.sin(TAU * t * beatHz / (PI * PHI));
+      // Carrier pulse: normalized to 528 Hz reference
+      const carrierP = 0.04 * Math.sin(PI  * t * carrier / 528);
+      const speed    = VM_BASE_SPD * phaseMul * (1 + phiWave + piWave + carrierP);
+      posRef.current = (posRef.current + speed * dt + totalH * 100) % totalH;
+      setTick(n => n + 1);
+      rafRef.current = requestAnimationFrame(frame);
+    }
+    rafRef.current = requestAnimationFrame(frame);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [totalH, beatHz, carrier]);
+
+  if (!lines?.length) return <div style={{ height }} />;
+
+  const offset = posRef.current % totalH;
+  // "up":   content moves upward  → ty decreases from 0 to -totalH → loop
+  // "down": content moves downward → ty goes from -totalH to 0 → loop
+  const ty = direction === "up" ? -offset : offset - totalH;
+
+  return (
+    <div style={{ overflow: "hidden", height, position: "relative" }}>
+      <div style={{ position: "absolute", top: 0, left: 0, right: 0, transform: `translateY(${ty}px)`, willChange: "transform" }}>
+        {[0, 1].map(copy => (
+          <div key={copy}>
+            {lines.map((line, i) => (
+              <div key={i} style={{ height: VM_ITEM_H, display: "flex", alignItems: "center", fontFamily: "'JetBrains Mono',monospace", fontSize: 7, color, letterSpacing: ".05em", padding: "0 4px", overflow: "hidden", whiteSpace: "nowrap" }}>
+                {line}
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── Toast ────────────────────────────────────────────────────────────────────
 function Toast({ msg, onDone }) {
   const [vis, setVis] = useState(false);
@@ -640,6 +702,7 @@ export default function HumanOS() {
   // Cheat codes: which are selected AND applied
   const [activeCheatCodes, setActiveCheatCodes] = useState({});   // { id: true } if applied
   const [cheatPending,     setCheatPending]     = useState({});   // selected but not yet applied
+  const [winW,             setWinW]             = useState(window.innerWidth);
 
   const breathRef  = useRef({ phase:"rest" });
   const rmssdRef   = useRef(0);
@@ -716,6 +779,12 @@ export default function HumanOS() {
       document.removeEventListener("touchstart", onFirstInteraction);
       document.removeEventListener("click",      onFirstInteraction);
     };
+  }, []);
+
+  useEffect(() => {
+    function onResize() { setWinW(window.innerWidth); }
+    window.addEventListener("resize", onResize, { passive: true });
+    return () => window.removeEventListener("resize", onResize);
   }, []);
 
   useEffect(()=>()=>{
@@ -898,12 +967,23 @@ export default function HumanOS() {
     const ss=String(Math.floor(rem%60)).padStart(2,"0");
     const done=(pkgsRef.current||[]).filter(p=>(pkgProg[p.id]||0)>=1).length;
     const total=(pkgsRef.current||[]).length;
+    // Responsive layout for mobile
+    const sideW   = Math.min(68, Math.floor(winW * 0.14));
+    const orbSize = Math.max(180, Math.min(300, winW - sideW * 2 - 24));
+    const marqueeH = orbSize + 90;
+    const affirmLines = AFFIRMATIONS_MARQUEE.split(" · ").filter(Boolean);
+    const leftLines  = [...gd.console_lines, ...affirmLines];
+    const rightLines = [
+      ...clLines,
+      ...(pkgsRef.current||[]).map(p => `${p.label} :: ${p.state}`),
+      ...affirmLines,
+    ];
     return (
       <div style={{...base,justifyContent:"flex-start",paddingTop:12}}>
         <style>{`${CSS}.gb{background-image:linear-gradient(${gd.color}04 1px,transparent 1px),linear-gradient(90deg,${gd.color}04 1px,transparent 1px);background-size:40px 40px;}`}</style>
         <div className="gb"/><div className="sl"/>
         {toast && <Toast msg={toast} onDone={()=>setToast(null)}/>}
-        <div style={{width:"100%",maxWidth:560,position:"relative",zIndex:1}}>
+        <div style={{width:"100%",position:"relative",zIndex:1}}>
 
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:11}}>
             <div>
@@ -925,9 +1005,16 @@ export default function HumanOS() {
             </div>
           </div>
 
-          <div style={{display:"grid",gridTemplateColumns:"242px 1fr",gap:13,marginBottom:11}}>
-            <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:7}}>
-              <NeuronOrb breathRef={breathRef} size={242}/>
+          <div style={{display:"flex",alignItems:"stretch",gap:6,marginBottom:11}}>
+            {/* Left column: top→bottom vertical marquee */}
+            <div style={{width:sideW,flexShrink:0,opacity:.8}}>
+              <VerticalMarquee lines={leftLines} color={`${gd.color}55`} direction="down"
+                breathRef={breathRef} beatHz={adaptive.beat} carrier={adaptive.carrier}
+                height={marqueeH}/>
+            </div>
+            {/* Center column: orb + timer + freq info */}
+            <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:6,minWidth:0}}>
+              <NeuronOrb breathRef={breathRef} size={orbSize}/>
               <div style={{textAlign:"center"}}>
                 <div style={{fontSize:22,fontWeight:300,letterSpacing:".1em",lineHeight:1}}>{mm}:{ss}</div>
                 <div style={{fontSize:6.5,color:"#1e293b",letterSpacing:".2em"}}>ОСТАЛОСЬ</div>
@@ -939,9 +1026,11 @@ export default function HumanOS() {
                 {rmssdDisp>0 && <div style={{color:gd.color}}>HRV {rmssdDisp}мс</div>}
               </div>
             </div>
-            <div style={{display:"flex",flexDirection:"column",gap:9,minWidth:0}}>
-              <Console lines={clLines} color={gd.color}/>
-              <PkgStream pkgs={pkgsRef.current||[]} progress={pkgProg} color={gd.color}/>
+            {/* Right column: bottom→top vertical marquee */}
+            <div style={{width:sideW,flexShrink:0,opacity:.8}}>
+              <VerticalMarquee lines={rightLines} color={`${gd.color}55`} direction="up"
+                breathRef={breathRef} beatHz={adaptive.beat} carrier={adaptive.carrier}
+                height={marqueeH}/>
             </div>
           </div>
 

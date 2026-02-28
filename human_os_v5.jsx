@@ -189,71 +189,114 @@ const CHEAT_CODES = {
 const AFFIRMATIONS_MARQUEE = "Я обновляю рецепторы и загружаю новые состояния · Моя нервная система перестраивается на созидательную частоту · Тотальное удовольствие от каждого процесса моей жизни · Моя интуиция активна и точна · Сексуальная энергия наполняет меня силой и витальностью · Я реализую своё предназначение здесь и сейчас · Я богатый·ая и реализованный·ая · Новые нейронные связи активируются прямо сейчас · Активность без спешки — моё базовое состояние · Спокойствие внутри и доверие миру · Трудолюбие и дисциплина — это удовольствие · Меняя состояние внутри — мир мгновенно реагирует возможностями · Я — мощный биоцифровой декодер Любви · Метакогниция активна — я редактирую свой код прямо сейчас · Я накапливаю и излучаю одновременно · Моя душа обогащается позитивным опытом · Я в унисон с планетой Земля · Сердечное слияние с высшим Я активировано ·";
 
 // ─── Audio ────────────────────────────────────────────────────────────────────
-// Shared AudioContext — created once on first user touch and kept alive.
-// iOS Safari suspends every new AudioContext; reusing one that was already
-// resumed inside a prior gesture is the only reliable cross-session fix.
+// iOS Safari rule: AudioContext must be CREATED and RESUMED inside the SAME
+// user-gesture call stack. We create a fresh context at every session start.
 let _sharedCtx = null;
 
-function _getAC() {
+// Called from initial touchstart listeners — creates the context early so it's
+// already warm when the session button is tapped.
+function _prewarmAudio() {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC || (_sharedCtx && _sharedCtx.state !== "closed")) return;
+  try {
+    _sharedCtx = new AC();
+    const buf = _sharedCtx.createBuffer(1, 1, _sharedCtx.sampleRate);
+    const src = _sharedCtx.createBufferSource();
+    src.buffer = buf; src.connect(_sharedCtx.destination); src.start(0);
+    _sharedCtx.resume().catch(() => {});
+  } catch(e) {}
+}
+
+// Called at the very start of any onClick that needs audio.
+// Creates a FRESH context (or reuses a running one) within the gesture scope.
+function _ensureCtx() {
   const AC = window.AudioContext || window.webkitAudioContext;
   if (!AC) return null;
-  if (!_sharedCtx || _sharedCtx.state === "closed") {
-    _sharedCtx = new AC();
+  // Reuse if already running
+  if (_sharedCtx && _sharedCtx.state === "running") return _sharedCtx;
+  // Reuse if suspended — play buffer + resume within this gesture
+  if (_sharedCtx && _sharedCtx.state === "suspended") {
+    try {
+      const buf = _sharedCtx.createBuffer(1, 1, _sharedCtx.sampleRate);
+      const src = _sharedCtx.createBufferSource();
+      src.buffer = buf; src.connect(_sharedCtx.destination); src.start(0);
+    } catch(e) {}
+    _sharedCtx.resume().catch(() => {});
+    return _sharedCtx;
   }
+  // Create fresh (closed / null)
+  try {
+    _sharedCtx = new AC();
+    _sharedCtx.resume().catch(() => {});
+  } catch(e) { return null; }
   return _sharedCtx;
 }
 
-// Call this from ANY user-gesture handler to pre-unlock iOS audio.
-// Always plays a silent buffer + calls resume regardless of current state —
-// iOS needs this pattern on EVERY fresh gesture that precedes AudioContext use.
-function _unlockAudio() {
-  const ctx = _getAC();
-  if (!ctx) return;
-  try {
-    const buf = ctx.createBuffer(1, 1, ctx.sampleRate);
-    const src = ctx.createBufferSource();
-    src.buffer = buf;
-    src.connect(ctx.destination);
-    src.start(0);
-  } catch(e){}
-  ctx.resume().catch(() => {});
-}
-
 class AudioEngine {
-  constructor() { this.ctx=null; this.running=false; this.bc=528; this.bb=PHI*PI; this.oL=null; this.oR=null; this.ng=null; this.mg=null; this.gL=null; this.gR=null; this.ns=null; }
+  constructor() {
+    this.ctx=null; this.running=false; this.bc=528; this.bb=PHI*PI;
+    this.oL=null; this.oR=null; this.ng=null; this.mg=null; this.ns=null;
+    this._pL=null; this._pR=null;
+  }
 
   start(carrier, beat, vol=0.15) {
     if (this.running) return;
     this.bc=carrier; this.bb=beat;
     try {
-      this.ctx = _getAC();
+      this.ctx = _sharedCtx; // use the context that was just created/resumed in gesture
       if (!this.ctx) return;
-      // ── FIX: resume() FIRST, before any heavy computation ────────────────
-      // iOS Safari kills the gesture-scope window if we do CPU work first.
-      // Calling resume() immediately keeps us firmly inside the gesture scope.
-      this.ctx.resume().catch(e=>console.warn("audio resume:",e));
-      // ── Fast synchronous node setup (oscillators only) ───────────────────
-      this.mg=this.ctx.createGain(); this.mg.gain.value=vol; this.mg.connect(this.ctx.destination);
-      const mer=this.ctx.createChannelMerger(2);
-      mer.connect(this.mg);
-      this.gL=this.ctx.createGain(); this.gL.gain.value=0.9;
-      this.gR=this.ctx.createGain(); this.gR.gain.value=0.9;
-      this.gL.connect(mer,0,0); this.gR.connect(mer,0,1);
-      this.oL=this.ctx.createOscillator(); this.oL.type="sine"; this.oL.frequency.value=carrier; this.oL.connect(this.gL); this.oL.start();
-      this.oR=this.ctx.createOscillator(); this.oR.type="sine"; this.oR.frequency.value=carrier+beat; this.oR.connect(this.gR); this.oR.start();
-      this.running=true;
-      // ── Defer heavy noise buffer — must NOT run in gesture scope ─────────
-      // Generating ~88 k samples takes 30–80 ms on mobile and would push
-      // ctx.resume() outside the iOS gesture window if done synchronously.
-      setTimeout(() => this._addNoise(), 120);
-    } catch(e){ console.warn("audio start:",e); }
+
+      // resume() immediately — keep inside the gesture-scope window
+      this.ctx.resume().catch(e=>console.warn("resume:",e));
+
+      // Auto-resume if iOS suspends later (call interruption, page hide, etc.)
+      this.ctx.onstatechange = () => {
+        if (this.ctx && this.ctx.state === "suspended" && this.running)
+          this.ctx.resume().catch(() => {});
+      };
+
+      // ── Audio graph: osc → StereoPanner → masterGain → destination ────────
+      // StereoPannerNode is more reliable on iOS than ChannelMerger.
+      this.mg = this.ctx.createGain();
+      this.mg.gain.value = Math.max(vol, 0.12);
+      this.mg.connect(this.ctx.destination);
+
+      const mkPan = (v) => {
+        try {
+          if (typeof this.ctx.createStereoPanner === "function") {
+            const p = this.ctx.createStereoPanner(); p.pan.value = v; return p;
+          }
+        } catch(e) {}
+        return null;
+      };
+
+      this._pL = mkPan(-1);
+      this._pR = mkPan(1);
+
+      this.oL = this.ctx.createOscillator();
+      this.oL.type = "sine"; this.oL.frequency.value = carrier;
+      if (this._pL) { this.oL.connect(this._pL); this._pL.connect(this.mg); }
+      else { this.oL.connect(this.mg); }
+      this.oL.start();
+
+      this.oR = this.ctx.createOscillator();
+      this.oR.type = "sine"; this.oR.frequency.value = carrier + beat;
+      if (this._pR) { this.oR.connect(this._pR); this._pR.connect(this.mg); }
+      else { this.oR.connect(this.mg); }
+      this.oR.start();
+
+      this.running = true;
+      // Defer noise buffer — CPU-heavy, safe to run outside gesture scope
+      // once the context is already running.
+      setTimeout(() => this._addNoise(), 150);
+    } catch(e) { console.warn("audio start:", e); }
   }
 
   _addNoise() {
     if (!this.running||!this.ctx||!this.mg) return;
     try {
       const sr=this.ctx.sampleRate; const nb=this.ctx.createBuffer(2,Math.floor(sr*2),sr);
-      for (let ch=0;ch<2;ch++){const d=nb.getChannelData(ch);let b0=0,b1=0,b2=0,b3=0,b4=0,b5=0,b6=0;for(let i=0;i<d.length;i++){const w=Math.random()*2-1;b0=.99886*b0+w*.0555179;b1=.99332*b1+w*.0750759;b2=.969*b2+w*.153852;b3=.8665*b3+w*.3104856;b4=.55*b4+w*.5329522;b5=-.7616*b5-w*.016898;d[i]=(b0+b1+b2+b3+b4+b5+b6+w*.5362)/7*.07;b6=w*.115926;}}
+      for(let ch=0;ch<2;ch++){const d=nb.getChannelData(ch);let b0=0,b1=0,b2=0,b3=0,b4=0,b5=0,b6=0;for(let i=0;i<d.length;i++){const w=Math.random()*2-1;b0=.99886*b0+w*.0555179;b1=.99332*b1+w*.0750759;b2=.969*b2+w*.153852;b3=.8665*b3+w*.3104856;b4=.55*b4+w*.5329522;b5=-.7616*b5-w*.016898;d[i]=(b0+b1+b2+b3+b4+b5+b6+w*.5362)/7*.07;b6=w*.115926;}}
       this.ns=this.ctx.createBufferSource(); this.ns.buffer=nb; this.ns.loop=true;
       this.ng=this.ctx.createGain(); this.ng.gain.value=0.04;
       this.ns.connect(this.ng); this.ng.connect(this.mg); this.ns.start();
@@ -270,20 +313,23 @@ class AudioEngine {
     if (this.ng) this.ng.gain.setTargetAtTime(0.022+(1-coh)*.04, t, 0.5);
   }
 
-  setVol(v) { if (this.mg&&this.ctx) this.mg.gain.setTargetAtTime(Math.max(0,v), this.ctx.currentTime, 0.1); }
+  setVol(v) {
+    if (this.mg&&this.ctx) this.mg.gain.setTargetAtTime(Math.max(0, v), this.ctx.currentTime, 0.1);
+  }
 
   stop() {
-    this.running=false;
+    this.running = false;
+    if (this.ctx) { try { this.ctx.onstatechange = null; } catch(e) {} }
     try {
       if (this.oL) { try{this.oL.stop();}catch(e){} this.oL.disconnect(); this.oL=null; }
       if (this.oR) { try{this.oR.stop();}catch(e){} this.oR.disconnect(); this.oR=null; }
       if (this.ns) { try{this.ns.stop();}catch(e){} this.ns.disconnect(); this.ns=null; }
       if (this.ng) { this.ng.disconnect(); this.ng=null; }
-      if (this.gL) { this.gL.disconnect(); this.gL=null; }
-      if (this.gR) { this.gR.disconnect(); this.gR=null; }
+      if (this._pL) { this._pL.disconnect(); this._pL=null; }
+      if (this._pR) { this._pR.disconnect(); this._pR=null; }
       if (this.mg) { this.mg.disconnect(); this.mg=null; }
-      // Keep _sharedCtx alive — closing it would require a new gesture to re-unlock on iOS.
-    } catch(e){}
+      // Keep _sharedCtx alive so next session doesn't need a new gesture.
+    } catch(e) {}
   }
 }
 
@@ -745,9 +791,9 @@ export default function HumanOS() {
   }
 
   function startSession() {
-    // Unlock audio FIRST — this call is inside the button onClick gesture scope.
-    // iOS requires resume() to be called before any computation within the gesture.
-    _unlockAudio();
+    // _ensureCtx() MUST be the very first call — we're inside the button onClick
+    // gesture scope. This creates/resumes the AudioContext before anything else.
+    _ensureCtx();
     if (!pkgsRef.current) pkgsRef.current=gd.pkgs;
     const adp=getAdaptive(rmssdRef.current);
     setAdaptive(adp); adaptRef.current=adp;
@@ -755,7 +801,13 @@ export default function HumanOS() {
     seenLines.current=new Set(); toastSent.current=false; setAudioOk(false);
     audioRef.current=new AudioEngine();
     audioRef.current.start(adp.carrier, adp.beat, vol);
-    setTimeout(()=>setAudioOk(audioRef.current?.running&&audioRef.current?.ctx?.state==="running"), 800);
+    // Poll audio state — give ctx time to transition from suspended→running
+    const checkAudio = () => {
+      const ok = audioRef.current?.running && audioRef.current?.ctx?.state === "running";
+      setAudioOk(ok);
+    };
+    setTimeout(checkAudio, 500);
+    setTimeout(checkAudio, 1500); // second check in case iOS was slow to resume
     startBreath(adp.breathSeq);
     const t0=Date.now();
     tickRef.current=setInterval(()=>{
@@ -777,18 +829,14 @@ export default function HumanOS() {
     setMods(mods); setStage("done");
   }
 
-  // Pre-unlock the AudioContext on the very first user interaction.
-  // iOS Safari suspends every AudioContext; calling resume() + playing a
-  // silent buffer from within ANY gesture scope unlocks it for the session.
+  // Prewarm AudioContext on first touch so it's ready (but not required) by session start.
   useEffect(() => {
-    function onFirstInteraction() {
-      _unlockAudio();
-    }
-    document.addEventListener("touchstart", onFirstInteraction, { once: true, passive: true });
-    document.addEventListener("click",      onFirstInteraction, { once: true });
+    function onFirstTouch() { _prewarmAudio(); }
+    document.addEventListener("touchstart", onFirstTouch, { once: true, passive: true });
+    document.addEventListener("click",      onFirstTouch, { once: true });
     return () => {
-      document.removeEventListener("touchstart", onFirstInteraction);
-      document.removeEventListener("click",      onFirstInteraction);
+      document.removeEventListener("touchstart", onFirstTouch);
+      document.removeEventListener("click",      onFirstTouch);
     };
   }, []);
 
@@ -1012,17 +1060,17 @@ export default function HumanOS() {
               </div>
               {!audioOk && (
                 <button onClick={()=>{
-                  // Unlock first — we're inside a button click = gesture scope
-                  _unlockAudio();
-                  if (audioRef.current?.running) {
-                    // Engine already running but iOS suspended context; just resume
-                    audioRef.current.ctx?.resume().then(()=>setAudioOk(true)).catch(()=>{});
+                  // _ensureCtx() is the FIRST call — we're inside a button click gesture
+                  const ctx = _ensureCtx();
+                  if (audioRef.current?.running && ctx) {
+                    // Context was suspended and is now resuming — just wait
+                    setTimeout(()=>setAudioOk(ctx.state==="running"),600);
                   } else {
-                    // Restart audio engine entirely
+                    // Restart audio engine from scratch
                     if (audioRef.current) audioRef.current.stop();
-                    audioRef.current=new AudioEngine();
-                    audioRef.current.start(adaptive.carrier,adaptive.beat,vol);
-                    setTimeout(()=>setAudioOk(audioRef.current?.running??false),500);
+                    audioRef.current = new AudioEngine();
+                    audioRef.current.start(adaptive.carrier, adaptive.beat, vol);
+                    setTimeout(()=>setAudioOk(audioRef.current?.running && audioRef.current?.ctx?.state==="running"), 600);
                   }
                 }} style={{background:"transparent",border:`1px solid ${gd.color}55`,color:gd.color,padding:"4px 9px",borderRadius:5,fontFamily:"monospace",fontSize:8,letterSpacing:".1em",cursor:"pointer",animation:"blink 2s step-end infinite"}}>🔊 звук</button>
               )}

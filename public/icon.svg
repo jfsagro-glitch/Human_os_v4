@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#020617"/>
+  <!-- Outer glow ring -->
+  <circle cx="256" cy="256" r="200" fill="none" stroke="#3de8a044" stroke-width="2"/>
+  <!-- Neuron soma -->
+  <circle cx="256" cy="256" r="80" fill="#3de8a015" stroke="#3de8a0" stroke-width="2.5"/>
+  <!-- Nucleus -->
+  <circle cx="256" cy="256" r="22" fill="#3de8a030" stroke="#3de8a066" stroke-width="1.2"/>
+  <!-- Dendrites (9 branches) -->
+  <g stroke="#3de8a055" stroke-width="1.8" stroke-linecap="round" fill="none">
+    <line x1="256" y1="256" x2="256" y2="140"/>
+    <line x1="256" y1="256" x2="360" y2="176"/>
+    <line x1="256" y1="256" x2="372" y2="290"/>
+    <line x1="256" y1="256" x2="290" y2="372"/>
+    <line x1="256" y1="256" x2="176" y2="372"/>
+    <line x1="256" y1="256" x2="140" y2="290"/>
+    <line x1="256" y1="256" x2="152" y2="176"/>
+    <line x1="256" y1="256" x2="200" y2="130"/>
+    <line x1="256" y1="256" x2="312" y2="130"/>
+  </g>
+  <!-- Synapse dots -->
+  <g fill="#3de8a0">
+    <circle cx="256" cy="140" r="5"/>
+    <circle cx="360" cy="176" r="4"/>
+    <circle cx="372" cy="290" r="4"/>
+    <circle cx="290" cy="372" r="4"/>
+    <circle cx="176" cy="372" r="4"/>
+    <circle cx="140" cy="290" r="5"/>
+    <circle cx="152" cy="176" r="4"/>
+    <circle cx="200" cy="130" r="3.5"/>
+    <circle cx="312" cy="130" r="3.5"/>
+  </g>
+  <!-- Axon -->
+  <line x1="316" y1="196" x2="388" y2="124" stroke="#3de8a077" stroke-width="1.5" stroke-dasharray="6,8" stroke-linecap="round"/>
+  <circle cx="390" cy="122" r="6" fill="#3de8a0cc"/>
+</svg>

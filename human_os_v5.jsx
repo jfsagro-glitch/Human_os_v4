@@ -189,19 +189,46 @@ const CHEAT_CODES = {
 const AFFIRMATIONS_MARQUEE = "Я обновляю рецепторы и загружаю новые состояния · Моя нервная система перестраивается на созидательную частоту · Тотальное удовольствие от каждого процесса моей жизни · Моя интуиция активна и точна · Сексуальная энергия наполняет меня силой и витальностью · Я реализую своё предназначение здесь и сейчас · Я богатый·ая и реализованный·ая · Новые нейронные связи активируются прямо сейчас · Активность без спешки — моё базовое состояние · Спокойствие внутри и доверие миру · Трудолюбие и дисциплина — это удовольствие · Меняя состояние внутри — мир мгновенно реагирует возможностями · Я — мощный биоцифровой декодер Любви · Метакогниция активна — я редактирую свой код прямо сейчас · Я накапливаю и излучаю одновременно · Моя душа обогащается позитивным опытом · Я в унисон с планетой Земля · Сердечное слияние с высшим Я активировано ·";
 
 // ─── Audio ────────────────────────────────────────────────────────────────────
+// Shared AudioContext — created once on first user touch and kept alive.
+// iOS Safari suspends every new AudioContext; reusing one that was already
+// resumed inside a prior gesture is the only reliable cross-session fix.
+let _sharedCtx = null;
+
+function _getAC() {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return null;
+  if (!_sharedCtx || _sharedCtx.state === "closed") {
+    _sharedCtx = new AC();
+  }
+  return _sharedCtx;
+}
+
+// Call this from ANY user-gesture handler to pre-unlock iOS audio.
+function _unlockAudio() {
+  const ctx = _getAC();
+  if (!ctx) return;
+  if (ctx.state === "suspended") {
+    // Play a 1-sample silent buffer — the minimum iOS needs to see.
+    const buf = ctx.createBuffer(1, 1, ctx.sampleRate);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    src.start(0);
+    ctx.resume().catch(() => {});
+  }
+}
+
 class AudioEngine {
-  constructor() { this.ctx=null; this.running=false; this.bc=528; this.bb=PHI*PI; this.oL=null; this.oR=null; this.ng=null; this.mg=null; }
+  constructor() { this.ctx=null; this.running=false; this.bc=528; this.bb=PHI*PI; this.oL=null; this.oR=null; this.ng=null; this.mg=null; this.gL=null; this.gR=null; this.ns=null; }
 
   start(carrier, beat, vol=0.15) {
     if (this.running) return;
     this.bc=carrier; this.bb=beat;
     try {
-      const AC = window.AudioContext||window.webkitAudioContext;
-      if (!AC) return;
-      this.ctx = new AC();
-      // Build all nodes synchronously within the user-gesture scope.
-      // iOS/Android suspend AudioContext by default; nodes must be wired up
-      // BEFORE any async boundary so the browser honours the gesture.
+      // Reuse the pre-unlocked shared context; fall back to a new one.
+      this.ctx = _getAC();
+      if (!this.ctx) return;
+      // All node wiring is synchronous within the user-gesture call stack.
       this.mg=this.ctx.createGain(); this.mg.gain.value=vol; this.mg.connect(this.ctx.destination);
       const mer=this.ctx.createChannelMerger(2);
       mer.connect(this.mg);
@@ -211,15 +238,14 @@ class AudioEngine {
       this.oL=this.ctx.createOscillator(); this.oL.type="sine"; this.oL.frequency.value=carrier; this.oL.connect(this.gL); this.oL.start();
       this.oR=this.ctx.createOscillator(); this.oR.type="sine"; this.oR.frequency.value=carrier+beat; this.oR.connect(this.gR); this.oR.start();
       try {
-        const sr=this.ctx.sampleRate; const nb=this.ctx.createBuffer(2,sr*4,sr);
+        // 2 s noise loop (halved from 4 s to reduce gesture-scope CPU spike on mobile).
+        const sr=this.ctx.sampleRate; const nb=this.ctx.createBuffer(2,Math.floor(sr*2),sr);
         for (let ch=0;ch<2;ch++) { const d=nb.getChannelData(ch); let b0=0,b1=0,b2=0,b3=0,b4=0,b5=0,b6=0; for (let i=0;i<d.length;i++){const w=Math.random()*2-1;b0=.99886*b0+w*.0555179;b1=.99332*b1+w*.0750759;b2=.969*b2+w*.153852;b3=.8665*b3+w*.3104856;b4=.55*b4+w*.5329522;b5=-.7616*b5-w*.016898;d[i]=(b0+b1+b2+b3+b4+b5+b6+w*.5362)/7*.07;b6=w*.115926;} }
-        const ns=this.ctx.createBufferSource(); ns.buffer=nb; ns.loop=true;
+        this.ns=this.ctx.createBufferSource(); this.ns.buffer=nb; this.ns.loop=true;
         this.ng=this.ctx.createGain(); this.ng.gain.value=0.04;
-        ns.connect(this.ng); this.ng.connect(this.mg); ns.start();
-      } catch(e){}
+        this.ns.connect(this.ng); this.ng.connect(this.mg); this.ns.start();
+      } catch(e){ console.warn("noise:",e); }
       this.running=true;
-      // Resume the suspended context. Calling resume() synchronously (not in
-      // a .then()) is what iOS Safari requires to stay within gesture scope.
       if (this.ctx.state!=="running") {
         this.ctx.resume().catch(e=>console.warn("audio resume:",e));
       }
@@ -237,7 +263,20 @@ class AudioEngine {
   }
 
   setVol(v) { if (this.mg&&this.ctx) this.mg.gain.setTargetAtTime(Math.max(0,v), this.ctx.currentTime, 0.1); }
-  stop() { this.running=false; try{ if(this.ctx) this.ctx.close(); }catch(e){} }
+
+  stop() {
+    this.running=false;
+    try {
+      if (this.oL) { try{this.oL.stop();}catch(e){} this.oL.disconnect(); this.oL=null; }
+      if (this.oR) { try{this.oR.stop();}catch(e){} this.oR.disconnect(); this.oR=null; }
+      if (this.ns) { try{this.ns.stop();}catch(e){} this.ns.disconnect(); this.ns=null; }
+      if (this.ng) { this.ng.disconnect(); this.ng=null; }
+      if (this.gL) { this.gL.disconnect(); this.gL=null; }
+      if (this.gR) { this.gR.disconnect(); this.gR=null; }
+      if (this.mg) { this.mg.disconnect(); this.mg=null; }
+      // Keep _sharedCtx alive — closing it would require a new gesture to re-unlock on iOS.
+    } catch(e){}
+  }
 }
 
 // ─── Neuron Orb ───────────────────────────────────────────────────────────────
@@ -663,6 +702,21 @@ export default function HumanOS() {
     const mods={}; (pkgsRef.current||[]).forEach(p=>{mods[p.mod]=Math.round(72+Math.random()*26);});
     setMods(mods); setStage("done");
   }
+
+  // Pre-unlock the AudioContext on the very first user interaction.
+  // iOS Safari suspends every AudioContext; calling resume() + playing a
+  // silent buffer from within ANY gesture scope unlocks it for the session.
+  useEffect(() => {
+    function onFirstInteraction() {
+      _unlockAudio();
+    }
+    document.addEventListener("touchstart", onFirstInteraction, { once: true, passive: true });
+    document.addEventListener("click",      onFirstInteraction, { once: true });
+    return () => {
+      document.removeEventListener("touchstart", onFirstInteraction);
+      document.removeEventListener("click",      onFirstInteraction);
+    };
+  }, []);
 
   useEffect(()=>()=>{
     clearInterval(tickRef.current); clearTimeout(breathTick.current);

@@ -1060,6 +1060,7 @@ export default function HumanOS() {
   const [winW,             setWinW]             = useState(window.innerWidth);
   const [breathMode,       setBreathMode]       = useState("normal");
   const [showInfo,         setShowInfo]         = useState(false);
+  const [pauseSecs,        setPauseSecs]        = useState(0);
 
   const breathRef      = useRef({ phase:"rest" });
   const rmssdRef       = useRef(0);
@@ -1074,6 +1075,8 @@ export default function HumanOS() {
   const sessionDurRef  = useRef(0);
   const sessionActiveRef = useRef(false);
   const wimInfoRef     = useRef("");
+  const phaseInfoRef   = useRef({ phase:"rest", dur:4, startedAt:Date.now() });
+  const heartbeatRef   = useRef(null);
 
   const gd = gender ? G[gender] : G.m;
 
@@ -1110,10 +1113,23 @@ export default function HumanOS() {
     function step() {
       const s = getStep(idx);
       if (!s) { if (onEnd) onEnd(); return; }
-      breathRef.current.phase=s.phase;
+      // ── Stop previous heartbeat loop ──────────────────────────────────────
+      if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current=null; }
+      breathRef.current.phase = s.phase;
+      phaseInfoRef.current    = { phase:s.phase, dur:s.dur, startedAt:Date.now() };
       if (audioRef.current) audioRef.current.onBreath(s.phase, rmssdRef.current);
-      if (s.phase==="inhale")       vibrate(18);
-      else if (s.phase==="exhale")  vibrate(12);
+      // ── Haptics: phase-aware heartbeat pattern ────────────────────────────
+      // lub-dub on inhale, softer on exhale, single tap on hold/rest start.
+      // Interval ≈ 833 ms (≈72 BPM) pulses simulate cardiac rhythm in sync.
+      if (s.phase==="inhale") {
+        vibrate([35, 100, 22]);                          // strong lub-dub
+        heartbeatRef.current = setInterval(()=>vibrate([35, 100, 22]), 833);
+      } else if (s.phase==="exhale") {
+        vibrate([22, 110, 14]);                          // softer lub-dub
+        heartbeatRef.current = setInterval(()=>vibrate([22, 110, 14]), 833);
+      } else if (s.phase==="hold" || s.phase==="rest") {
+        vibrate([28]);                                   // single tap: start of hold
+      }
       if (s.info) wimInfoRef.current=s.info;
       breathTick.current=setTimeout(step, s.dur*1000); idx++;
     }
@@ -1131,9 +1147,9 @@ export default function HumanOS() {
     sessionActiveRef.current=true; wimInfoRef.current="";
     audioRef.current=new AudioEngine();
     audioRef.current.start(adp.carrier, adp.beat, vol);
-    // Wake lock (keeps screen on) + haptic start signal
+    // Wake lock (keeps screen on) + haptic start signal (ascending triple pulse)
     requestWakeLock();
-    vibrate([80, 40, 80, 40, 160]);
+    vibrate([60, 40, 80, 40, 120, 40, 180]);
     // Poll audio state
     const checkAudio = () => {
       const ok = audioRef.current?.running && audioRef.current?.ctx?.state === "running";
@@ -1172,11 +1188,13 @@ export default function HumanOS() {
     if (!sessionActiveRef.current) return; // guard against double-call
     sessionActiveRef.current=false;
     clearInterval(tickRef.current); clearTimeout(breathTick.current);
+    if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current=null; }
     if (audioRef.current) audioRef.current.stop();
     const mods={}; (pkgsRef.current||[]).forEach(p=>{mods[p.mod]=Math.round(72+Math.random()*26);});
     setMods(mods); setStage("done");
     releaseWakeLock();
-    vibrate([200, 80, 200, 80, 400]);
+    // End signal: two strong descending pulses + long finale
+    vibrate([200, 80, 160, 80, 120, 80, 400]);
   }
 
   // Prewarm AudioContext on first touch so it's ready (but not required) by session start.
@@ -1206,6 +1224,7 @@ export default function HumanOS() {
 
   useEffect(()=>()=>{
     clearInterval(tickRef.current); clearTimeout(breathTick.current);
+    if (heartbeatRef.current) clearInterval(heartbeatRef.current);
     if (audioRef.current) audioRef.current.stop();
     releaseWakeLock();
   },[]);
@@ -1230,6 +1249,21 @@ export default function HumanOS() {
   },[Math.floor(elapsed*2)]);
 
   useEffect(()=>{if(audioRef.current)audioRef.current.setVol(vol);},[vol]);
+
+  // ── Pause/hold countdown: updates every 250 ms while running ──────────────
+  useEffect(() => {
+    if (stage !== "running") { setPauseSecs(0); return; }
+    const iv = setInterval(() => {
+      const pi = phaseInfoRef.current;
+      if ((pi.phase==="rest" || pi.phase==="hold") && pi.dur > 10) {
+        const gone = (Date.now() - pi.startedAt) / 1000;
+        setPauseSecs(Math.max(0, Math.ceil(pi.dur - gone)));
+      } else {
+        setPauseSecs(0);
+      }
+    }, 250);
+    return () => clearInterval(iv);
+  }, [stage]);
 
   // ── GENDER SELECT ──────────────────────────────────────────────────────────
   if (stage==="gender_select") return (
@@ -1490,6 +1524,14 @@ export default function HumanOS() {
             {/* Center column: orb + timer + freq info */}
             <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:6,minWidth:0}}>
               <NeuronOrb breathRef={breathRef} size={orbSize}/>
+              {pauseSecs > 0 && (
+                <div style={{textAlign:"center",animation:"fadeUp .25s ease"}}>
+                  <div style={{fontSize:44,fontWeight:200,letterSpacing:".04em",lineHeight:1,color:gd.color,textShadow:`0 0 22px ${gd.color}66`}}>{pauseSecs}</div>
+                  <div style={{fontSize:6.5,color:"#334155",letterSpacing:".25em",marginTop:2}}>
+                    {breathRef.current?.phase==="hold"?"ЗАДЕРЖКА":"ПАУЗА"}
+                  </div>
+                </div>
+              )}
               <div style={{textAlign:"center"}}>
                 <div style={{fontSize:22,fontWeight:300,letterSpacing:".1em",lineHeight:1}}>{mm}:{ss}</div>
                 <div style={{fontSize:6.5,color:"#1e293b",letterSpacing:".2em"}}>ОСТАЛОСЬ</div>

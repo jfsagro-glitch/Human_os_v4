@@ -23,18 +23,25 @@ function getMoonInfo(p) {
 // ─── Adaptive params ──────────────────────────────────────────────────────────
 function computeAdaptive(hour, moon, rmssd, gender) {
   const g = gender === "f";
-  // Time window
+  const now = new Date();
+  const mn  = now.getMonth() + 1; // 1-12
+  const dy  = now.getDate();
+  const yr  = now.getFullYear();
+  const doy = Math.floor((now - new Date(yr, 0, 0)) / 86400000);
+
+  // ── Time window ────────────────────────────────────────────────────────────
   const tw = hour>=5&&hour<8?"dawn":hour>=8&&hour<12?"morning":hour>=12&&hour<15?"midday":
              hour>=15&&hour<19?"afternoon":hour>=19&&hour<22?"evening":"night";
   const TB = {
     dawn:      { in:PHI**2*.9,  hold:PHI*.8,  ex:PHI**3*.9,  rest:PHI**2*.8,  lbl:"🌅 Рассвет"  },
     morning:   { in:PHI**2,     hold:PHI,     ex:PHI**3,     rest:PHI**2,     lbl:"☀️ Утро"      },
     midday:    { in:PHI**2*1.1, hold:PHI*1.1, ex:PHI**3*1.2, rest:PHI**2,     lbl:"🔆 Полдень"   },
-    afternoon: { in:PHI**2*1.1, hold:PHI,     ex:PHI**3*1.3, rest:PHI**2*1.1, lbl:"🌤 День"     },
+    afternoon: { in:PHI**2*1.1, hold:PHI,     ex:PHI**3*1.3, rest:PHI**2*1.1, lbl:"🌤 День"      },
     evening:   { in:PHI**2*1.2, hold:PHI*.9,  ex:PHI**3*1.4, rest:PHI**2*1.2, lbl:"🌆 Вечер"    },
     night:     { in:PHI**2*1.4, hold:PHI*1.3, ex:PHI**3*1.5, rest:PHI**2*1.5, lbl:"🌙 Ночь"     },
   }[tw];
-  // HRV mult
+
+  // ── HRV multiplier ─────────────────────────────────────────────────────────
   let hm=1, hlbl="";
   if (rmssd>0) {
     if      (rmssd<20) { hm=0.75; hlbl="⚡ стресс→стаб"; }
@@ -43,33 +50,91 @@ function computeAdaptive(hour, moon, rmssd, gender) {
     else if (rmssd<70) { hm=1.15; hlbl="💚 высокий";     }
     else               { hm=1.28; hlbl="✨ отлично";     }
   }
-  // Moon freq
+
+  // ── Moon frequency ─────────────────────────────────────────────────────────
   const MF = {
     new:    { carrier:g?396:528, beat:PHI**2,  mlbl:"🌑 обнуление" },
     waxing: { carrier:g?417:528, beat:PHI*PI,  mlbl:"🌒 рост"      },
     full:   { carrier:528,       beat:PHI**3,  mlbl:"🌕 полнота"   },
     waning: { carrier:g?285:432, beat:PHI*2,   mlbl:"🌖 интеграция"},
   }[moon.type] || { carrier:528, beat:PHI*PI, mlbl:"" };
-  // Astro
-  const now=new Date();
-  const doy=Math.floor((now-new Date(now.getFullYear(),0,0))/86400000);
-  const zi=Math.floor(((doy+10)%365)/30.44);
-  const zn=["♑","♒","♓","♈","♉","♊","♋","♌","♍","♎","♏","♐"][zi];
-  const elMult=[1.0,1.05,1.1,1.15][[2,3,1,0,2,3,1,0,2,3,1,0][zi]];
-  const mercRx=(doy>=64&&doy<=84)||(doy>=162&&doy<=182)||(doy>=274&&doy<=294);
-  // Final
-  const M=hm*elMult;
-  const breathSeq=[
-    { phase:"inhale", dur:Math.max(2.0, TB.in  *M) },
-    { phase:"hold",   dur:Math.max(1.0, TB.hold *M) },
-    { phase:"exhale", dur:Math.max(3.0, TB.ex   *M) },
-    { phase:"rest",   dur:Math.max(1.5, TB.rest *M) },
+
+  // ── Accurate Zodiac (exact month/day boundaries) ───────────────────────────
+  let zi;
+  if ((mn===12&&dy>=22)||(mn===1&&dy<=19))      zi=0; // ♑ Козерог
+  else if ((mn===1&&dy>=20)||(mn===2&&dy<=18))  zi=1; // ♒ Водолей
+  else if ((mn===2&&dy>=19)||(mn===3&&dy<=20))  zi=2; // ♓ Рыбы
+  else if ((mn===3&&dy>=21)||(mn===4&&dy<=19))  zi=3; // ♈ Овен
+  else if ((mn===4&&dy>=20)||(mn===5&&dy<=20))  zi=4; // ♉ Телец
+  else if ((mn===5&&dy>=21)||(mn===6&&dy<=20))  zi=5; // ♊ Близнецы
+  else if ((mn===6&&dy>=21)||(mn===7&&dy<=22))  zi=6; // ♋ Рак
+  else if ((mn===7&&dy>=23)||(mn===8&&dy<=22))  zi=7; // ♌ Лев
+  else if ((mn===8&&dy>=23)||(mn===9&&dy<=22))  zi=8; // ♍ Дева
+  else if ((mn===9&&dy>=23)||(mn===10&&dy<=22)) zi=9; // ♎ Весы
+  else if ((mn===10&&dy>=23)||(mn===11&&dy<=21))zi=10;// ♏ Скорпион
+  else                                          zi=11;// ♐ Стрелец
+  const ZN = ["♑","♒","♓","♈","♉","♊","♋","♌","♍","♎","♏","♐"];
+  const zn  = ZN[zi];
+  // Elements: Earth(0)=Cap,Tau,Vir · Air(1)=Aqu,Gem,Lib · Water(2)=Pis,Can,Sco · Fire(3)=Ari,Leo,Sag
+  const EL_IDX  = [0,1,2,3,0,1,2,3,0,1,2,3];
+  const EL_MULT = [1.0, 1.08, 1.05, 1.12];
+  const EL_ICO  = ["🌍","🌬","🌊","🔥"];
+  const elIdx   = EL_IDX[zi];
+  const elMult  = EL_MULT[elIdx];
+
+  // ── Mercury Rx 2026: Jan9-31, May10-Jun3, Sep5-29, Dec25+ ─────────────────
+  const mercRx = yr===2026
+    ? (doy>=9&&doy<=31)||(doy>=130&&doy<=154)||(doy>=248&&doy<=272)||(doy>=359)
+    : (doy>=64&&doy<=84)||(doy>=162&&doy<=182)||(doy>=274&&doy<=294); // 2025
+
+  // ── Venus Rx 2026: Jul22–Sep12 (DOY 203–255) ──────────────────────────────
+  const venusRx = yr===2026 && doy>=203 && doy<=255;
+
+  // ── Solstice/Equinox ±3 days (2026: Mar20=79, Jun21=172, Sep23=266, Dec21=355)
+  const CARD_DOYS = [79,172,266,355];
+  const nearCard  = CARD_DOYS.some(s=>Math.abs(doy-s)<=3);
+  const cardMult  = nearCard ? 1.05 : 1.0;
+
+  // ── North Node in Pisces (Jan12,2025 – Jul26,2026 · DOY2026≤207) ──────────
+  const nnPisces = (yr===2025&&doy>=12)||(yr===2026&&doy<=207);
+  const nnMult   = nnPisces ? 1.03 : 1.0;
+
+  // ── Planetary Hour · Chaldean order ───────────────────────────────────────
+  // Day rulers (getDay 0-6): Sun→3, Mon→6, Tue→2, Wed→5, Thu→1, Fri→4, Sat→0
+  const DAY_RULERS = [3,6,2,5,1,4,0];
+  const phIdx = (DAY_RULERS[now.getDay()] + now.getHours()) % 7;
+  const PH_LBL = ["♄ Сатурн","♃ Юпитер","♂ Марс","☉ Солнце","♀ Венера","☿ Меркурий","☽ Луна"];
+  // Per-planet modifiers [inMult, holdMult, exMult, restMult, carrierDelta, beatMult]
+  const PH_MOD = [
+    [1.0,  1.05, 1.08, 1.0,  0, 1.0  ], // Saturn:  structure → longer hold+exhale
+    [1.05, 1.0,  1.0,  1.0,  0, 1.0  ], // Jupiter: expansion → deeper inhale
+    [1.0,  1.0,  1.0,  0.95, 0, 1.0  ], // Mars:    energy → shortened rest
+    [1.03, 1.03, 1.03, 1.03, 0, 1.0  ], // Sun:     vitality → uniform boost
+    [1.0,  1.0,  1.0,  1.0, -3, 1.0  ], // Venus:   harmony → lower carrier
+    [1.0,  1.0,  1.0,  1.0,  0, 1.0  ], // Mercury: neutral
+    [1.0,  1.0,  1.0,  1.05, 0, 1.05 ], // Moon:    intuition → longer rest, slower beat
   ];
-  const carrier=MF.carrier+(rmssd>55?-2:0);
-  const beat=MF.beat*(rmssd>55?0.92:1.0);
-  const tBonus=tw==="dawn"?3:tw==="night"?4:0;
-  const totalMin=Math.round((moon.power>=.9?20:moon.power>=.75?17:14)+tBonus);
-  const reasons=[TB.lbl, MF.mlbl, zn+(mercRx?" ☿R":""), rmssd>0?hlbl:null].filter(Boolean).join(" · ");
+  const phMod = PH_MOD[phIdx];
+
+  // ── Final multiplier ───────────────────────────────────────────────────────
+  const M = hm * elMult * cardMult * nnMult;
+  const breathSeq = [
+    { phase:"inhale", dur:Math.max(2.0, TB.in  *M*phMod[0]) },
+    { phase:"hold",   dur:Math.max(1.0, TB.hold*M*phMod[1]) },
+    { phase:"exhale", dur:Math.max(3.0, TB.ex  *M*phMod[2]) },
+    { phase:"rest",   dur:Math.max(1.5, TB.rest*M*phMod[3]) },
+  ];
+  const carrier = MF.carrier + (rmssd>55?-2:0) + phMod[4];
+  const beat    = MF.beat * (rmssd>55?0.92:1.0) * phMod[5];
+  const tBonus  = tw==="dawn"?3:tw==="night"?4:0;
+  const totalMin= Math.round((moon.power>=.9?20:moon.power>=.75?17:14)+tBonus);
+  const rxFlags = [mercRx?"☿R":"",venusRx?"♀R":""].filter(Boolean).join(" ");
+  const reasons = [
+    TB.lbl, MF.mlbl,
+    zn+EL_ICO[elIdx]+(rxFlags?" "+rxFlags:""),
+    PH_LBL[phIdx],
+    rmssd>0?hlbl:null,
+  ].filter(Boolean).join(" · ");
   return { breathSeq, carrier, beat, totalMin, reasons, tw };
 }
 
@@ -187,6 +252,8 @@ const CHEAT_CODES = {
 
 // ─── Affirmations marquee text (left-to-right, from source document) ──────────
 const AFFIRMATIONS_MARQUEE = "Я обновляю рецепторы и загружаю новые состояния · Моя нервная система перестраивается на созидательную частоту · Тотальное удовольствие от каждого процесса моей жизни · Моя интуиция активна и точна · Сексуальная энергия наполняет меня силой и витальностью · Я реализую своё предназначение здесь и сейчас · Я богатый·ая и реализованный·ая · Новые нейронные связи активируются прямо сейчас · Активность без спешки — моё базовое состояние · Спокойствие внутри и доверие миру · Трудолюбие и дисциплина — это удовольствие · Меняя состояние внутри — мир мгновенно реагирует возможностями · Я — мощный биоцифровой декодер Любви · Метакогниция активна — я редактирую свой код прямо сейчас · Я накапливаю и излучаю одновременно · Моя душа обогащается позитивным опытом · Я в унисон с планетой Земля · Сердечное слияние с высшим Я активировано ·";
+// Pre-computed once at module level — avoids .split() on every render
+const AFFIRMATION_LINES = AFFIRMATIONS_MARQUEE.split(" · ").filter(Boolean);
 
 // ─── Audio ────────────────────────────────────────────────────────────────────
 // iOS Safari rule: AudioContext must be CREATED and RESUMED inside the SAME
@@ -230,6 +297,106 @@ function _ensureCtx() {
     _sharedCtx.resume().catch(() => {});
   } catch(e) { return null; }
   return _sharedCtx;
+}
+
+// ─── Haptics ──────────────────────────────────────────────────────────────────
+function vibrate(pattern) {
+  if (typeof navigator !== "undefined" && navigator.vibrate) {
+    try { navigator.vibrate(pattern); } catch(e) {}
+  }
+}
+
+// ─── Breath Modes ─────────────────────────────────────────────────────────────
+// All timing derived from φ, π, Schumann resonance and live HRV data.
+//
+// Base units:
+//   φ¹ = 1.618   φ² = 2.618   φ³ = 4.236   φ⁴ = 6.854   φ⁵ = 11.09
+//   φ/π = 0.515  (minimal hold — barely perceptible, just a pivot)
+//   φ×π = 5.083  (binaural beat entrainment frequency)
+//   Schumann = 7.83 Hz → sub-harmonic n=78 → 0.1 Hz → 10 s/breath → 6 BPM (coherence)
+//
+// HRV multiplier  rmssd → hm  (scales all durations):
+//   < 20 ms  →  0.75  (stress — shorter, stabilising)
+//   20-35    →  0.88
+//   35-55    →  1.00  (baseline)
+//   55-70    →  1.15
+//   > 70     →  1.28  (excellent — deeper, longer)
+
+function rmssdToHm(rmssd) {
+  if (!rmssd || rmssd <= 0) return 1.0;
+  if (rmssd < 20) return 0.75;
+  if (rmssd < 35) return 0.88;
+  if (rmssd < 55) return 1.00;
+  if (rmssd < 70) return 1.15;
+  return 1.28;
+}
+
+// Stochastic φ-jitter: natural breath variability prevents neural adaptation.
+// strength 0.1 → ±(φ−1)×5% ≈ ±3.1 %
+function phiJitter(strength=0.1) {
+  return 1 + (Math.random() - 0.5) * (PHI - 1) * strength;
+}
+
+// ── ЛАЙТ · Soft Coherence ─────────────────────────────────────────────────────
+// Formula: φ² : φ/π : φ³ : φ  (in : hold : out : rest)
+// Total cycle ≈ φ²+φ/π+φ³+φ = 8.99 s → 6.68 BPM — cardiac coherence zone.
+// Duration: φ⁵ minutes = 11.09 min
+// Fully re-evaluated each step using live rmssdRef → truly adaptive.
+function makeLightStep(rmssdRef) {
+  return (idx) => {
+    const hm = rmssdToHm(rmssdRef.current);
+    const jt = phiJitter(0.1);
+    const phases = [
+      { phase:"inhale", dur: Math.max(2.0, PHI**2 * hm * jt)    },
+      { phase:"hold",   dur: Math.max(0.2, (PHI / PI) * hm)      },
+      { phase:"exhale", dur: Math.max(3.0, PHI**3 * hm * jt)     },
+      { phase:"rest",   dur: Math.max(1.0, PHI * hm)              },
+    ];
+    return phases[idx % 4];
+  };
+}
+
+// ── НОРМ · Adaptive φ-system (reads adaptRef live) ────────────────────────────
+// Uses computeAdaptive() result which encodes moon, time-of-day, zodiac, HRV.
+// Re-reads adaptRef.current each breath → adapts to HRV sensor in real time.
+function makeNormStep(adaptRef, rmssdRef) {
+  return (idx) => {
+    const seq = adaptRef.current?.breathSeq;
+    if (!seq?.length) return { phase:"exhale", dur:4 };
+    const base = seq[idx % seq.length];
+    const jt = phiJitter(0.05); // gentle 1.5% jitter
+    return { ...base, dur: Math.max(1.0, base.dur * jt) };
+  };
+}
+
+// ── ХАРД · Wim Hof + φ ────────────────────────────────────────────────────────
+// Structure per round:
+//   π×10 = 31 power breaths  (φ²:φ  — inhale longer than exhale → CO₂ deficit)
+//   Exhale + hold empty lungs (φ⁵×π×φ × hm — HRV-adaptive, 20–90 s)
+//   Recovery deep inhale (φ³ s) + hold (φ⁵ s)
+// 3 rounds total.
+// Stochastic jitter ±(φ−1)×4% on power breath timing.
+function makeWimHofGen(rmssd=0) {
+  const hm       = rmssdToHm(rmssd);
+  const rounds    = 3;                            // φ² rounded
+  const pwr       = Math.round(PI * 10);          // 31 breaths (π×10)
+  // Retention: φ⁵×π×φ ≈ 56.3 s scaled by HRV, clamped 20–90 s
+  const retDur    = Math.max(20, Math.min(90, PHI**5 * PI * PHI * hm));
+
+  const seq = [];
+  for (let r = 0; r < rounds; r++) {
+    for (let i = 0; i < pwr; i++) {
+      const jt = phiJitter(0.08);
+      seq.push({ phase:"inhale", dur: PHI**2 * jt, info:`Р${r+1}/${rounds} · вдох ${i+1}/${pwr}` });
+      seq.push({ phase:"exhale", dur: PHI    * jt, info:`Р${r+1}/${rounds} · вдох ${i+1}/${pwr}` });
+    }
+    seq.push({ phase:"rest",   dur: retDur,         info:`Р${r+1}/${rounds} · задержка · ${Math.round(retDur)}с` });
+    seq.push({ phase:"inhale", dur: PHI**3,          info:`Р${r+1}/${rounds} · восстановление` });
+    seq.push({ phase:"hold",   dur: PHI**5,          info:`Р${r+1}/${rounds} · удержание · ${Math.round(PHI**5)}с` });
+  }
+
+  const totalDur = seq.reduce((s, x) => s + x.dur, 0);
+  return { step: (idx) => idx < seq.length ? seq[idx] : null, totalDur };
 }
 
 class AudioEngine {
@@ -539,9 +706,10 @@ function PkgStream({ pkgs, progress, color }) {
 
 // ─── Marquee ──────────────────────────────────────────────────────────────────
 // direction: "rtl" (default, right-to-left) | "ltr" (left-to-right)
+// Optimization: directly updates DOM via ref instead of setState each frame.
 function Marquee({ text, color, speed=38, direction="rtl" }) {
   const full = text + "   ·   " + text + "   ·   ";
-  const [pos, setPos] = useState(0);
+  const spanRef = useRef(null);
   const rafRef  = useRef(null);
   const prevRef = useRef(performance.now());
   const posRef  = useRef(0);
@@ -557,7 +725,7 @@ function Marquee({ text, color, speed=38, direction="rtl" }) {
       } else {
         posRef.current = (posRef.current + speed * dt) % total;
       }
-      setPos(posRef.current);
+      if (spanRef.current) spanRef.current.style.transform = `translateX(${-posRef.current}px)`;
       rafRef.current=requestAnimationFrame(tick);
     }
     rafRef.current=requestAnimationFrame(tick);
@@ -566,7 +734,7 @@ function Marquee({ text, color, speed=38, direction="rtl" }) {
 
   return (
     <div style={{overflow:"hidden",whiteSpace:"nowrap"}}>
-      <span style={{display:"inline-block",transform:`translateX(${-posRef.current}px)`,fontFamily:"'JetBrains Mono',monospace",fontSize:9,color,letterSpacing:".06em",lineHeight:1.8,willChange:"transform"}}>
+      <span ref={spanRef} style={{display:"inline-block",transform:"translateX(0px)",fontFamily:"'JetBrains Mono',monospace",fontSize:9,color,letterSpacing:".06em",lineHeight:1.8,willChange:"transform"}}>
         {full}{full}
       </span>
     </div>
@@ -576,15 +744,16 @@ function Marquee({ text, color, speed=38, direction="rtl" }) {
 // ─── VerticalMarquee ──────────────────────────────────────────────────────────
 // direction: "up" (bottom→top, right side) | "down" (top→bottom, left side)
 // Speed is modulated by φ×π algorithm, synchronized with breath phase & audio.
+// Optimization: directly updates DOM via ref instead of setState each frame.
 const VM_PHASE_MUL = { inhale: PHI, hold: 1.0, exhale: PHI * PHI, rest: 1 / PHI };
 const VM_BASE_SPD  = 26; // px/s base scroll speed
 const VM_ITEM_H    = 16; // px per line
 
 function VerticalMarquee({ lines, color, direction = "up", breathRef, beatHz = 0.1, carrier = 528, height = 320 }) {
-  const posRef  = useRef(0);
-  const prevRef = useRef(performance.now());
-  const rafRef  = useRef(null);
-  const [, setTick] = useState(0);
+  const posRef   = useRef(0);
+  const prevRef  = useRef(performance.now());
+  const rafRef   = useRef(null);
+  const innerRef = useRef(null);
 
   const totalH = (lines?.length || 0) * VM_ITEM_H;
 
@@ -604,23 +773,22 @@ function VerticalMarquee({ lines, color, direction = "up", breathRef, beatHz = 0
       const carrierP = 0.04 * Math.sin(PI  * t * carrier / 528);
       const speed    = VM_BASE_SPD * phaseMul * (1 + phiWave + piWave + carrierP);
       posRef.current = (posRef.current + speed * dt + totalH * 100) % totalH;
-      setTick(n => n + 1);
+      if (innerRef.current) {
+        const offset = posRef.current % totalH;
+        const ty = direction === "up" ? -offset : offset - totalH;
+        innerRef.current.style.transform = `translateY(${ty}px)`;
+      }
       rafRef.current = requestAnimationFrame(frame);
     }
     rafRef.current = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [totalH, beatHz, carrier]);
+  }, [totalH, beatHz, carrier, direction]);
 
   if (!lines?.length) return <div style={{ height }} />;
 
-  const offset = posRef.current % totalH;
-  // "up":   content moves upward  → ty decreases from 0 to -totalH → loop
-  // "down": content moves downward → ty goes from -totalH to 0 → loop
-  const ty = direction === "up" ? -offset : offset - totalH;
-
   return (
     <div style={{ overflow: "hidden", height, position: "relative" }}>
-      <div style={{ position: "absolute", top: 0, left: 0, right: 0, transform: `translateY(${ty}px)`, willChange: "transform" }}>
+      <div ref={innerRef} style={{ position: "absolute", top: 0, left: 0, right: 0, transform: "translateY(0px)", willChange: "transform" }}>
         {[0, 1].map(copy => (
           <div key={copy}>
             {lines.map((line, i) => (
@@ -650,11 +818,14 @@ function Toast({ msg, onDone }) {
   );
 }
 
-// ─── HRV Panel ───────────────────────────────────────────────────────────────
+// ─── HRV / Sensor Panel ───────────────────────────────────────────────────────
 function HRVPanel({ onData, color }) {
-  const [status, setStatus] = useState("idle");
-  const [rmssd,  setRmssd]  = useState(0);
-  const [bpm,    setBpm]    = useState(0);
+  const [tab,      setTab]      = useState("ble");
+  const [status,   setStatus]   = useState("idle");
+  const [rmssd,    setRmssd]    = useState(0);
+  const [bpm,      setBpm]      = useState(0);
+  const [manBpm,   setManBpm]   = useState("");
+  const [manRmssd, setManRmssd] = useState("");
   const buf = useRef([]);
 
   function calcRmssd(b) {
@@ -663,19 +834,29 @@ function HRVPanel({ onData, color }) {
     return Math.sqrt(d.reduce((a,c)=>a+c)/d.length);
   }
 
-  async function connect() {
+  async function connectBLE(scanAll=false) {
     if (!navigator.bluetooth) { setStatus("error"); return; }
     try {
       setStatus("connecting");
-      const dev=await navigator.bluetooth.requestDevice({
-        filters:[{namePrefix:"Polar"},{namePrefix:"XOSS"},{namePrefix:"Magene"},{namePrefix:"H10"},{namePrefix:"H7"}],
-        optionalServices:["0000180d-0000-1000-8000-00805f9b34fb"],
-      });
-      const srv=await dev.gatt.connect();
-      const svc=await srv.getPrimaryService("0000180d-0000-1000-8000-00805f9b34fb");
-      const ch=await svc.getCharacteristic("00002a37-0000-1000-8000-00805f9b34fb");
+      const opts = scanAll
+        ? { acceptAllDevices:true, optionalServices:["0000180d-0000-1000-8000-00805f9b34fb"] }
+        : {
+            filters:[
+              {namePrefix:"Polar"},{namePrefix:"H10"},{namePrefix:"H7"},
+              {namePrefix:"XOSS"},{namePrefix:"Magene"},
+              {namePrefix:"Garmin"},{namePrefix:"TICKR"},{namePrefix:"Wahoo"},
+              {namePrefix:"Suunto"},{namePrefix:"CooSpo"},{namePrefix:"Coospo"},
+              {namePrefix:"4iiii"},{namePrefix:"Movesense"},{namePrefix:"KMH"},
+              {namePrefix:"Decathlon"},{namePrefix:"RR"},{namePrefix:"HXM"},
+            ],
+            optionalServices:["0000180d-0000-1000-8000-00805f9b34fb"],
+          };
+      const dev = await navigator.bluetooth.requestDevice(opts);
+      const srv = await dev.gatt.connect();
+      const svc = await srv.getPrimaryService("0000180d-0000-1000-8000-00805f9b34fb");
+      const ch  = await svc.getCharacteristic("00002a37-0000-1000-8000-00805f9b34fb");
       await ch.startNotifications();
-      ch.addEventListener("characteristicvaluechanged",e=>{
+      ch.addEventListener("characteristicvaluechanged", e => {
         const v=e.target.value, fl=v.getUint8(0);
         const b=(fl&1)?v.getUint16(1,true):v.getUint8(1); setBpm(b);
         if ((fl>>4)&1){
@@ -689,32 +870,84 @@ function HRVPanel({ onData, color }) {
     } catch(e){ setStatus("error"); }
   }
 
-  const qc=rmssd<20?"#ef4444":rmssd<35?"#f97316":rmssd<50?"#fbbf24":rmssd<70?"#86efac":"#4ade80";
-  const ql=rmssd<20?"критично":rmssd<35?"низкий":rmssd<50?"норма":rmssd<70?"хорошо":"отлично";
+  function applyManual() {
+    const b=parseInt(manBpm)||0, r=parseFloat(manRmssd)||0;
+    if (b>20||r>0) { setBpm(b); setRmssd(r); onData(r,b); setStatus("manual"); }
+  }
+
+  const active = status==="connected"||status==="manual";
+  const qc = rmssd<20?"#ef4444":rmssd<35?"#f97316":rmssd<50?"#fbbf24":rmssd<70?"#86efac":"#4ade80";
+  const ql = rmssd<20?"критично":rmssd<35?"низкий":rmssd<50?"норма":rmssd<70?"хорошо":"отлично";
+  const tabS = (on) => ({
+    flex:1,padding:"4px 0",fontSize:7.5,letterSpacing:".1em",border:"none",cursor:"pointer",
+    background:on?"rgba(30,41,59,.9)":"transparent",
+    color:on?color:"#334155",
+    borderBottom:`1px solid ${on?color+"55":"#0a0f1a"}`,
+  });
+  const inputS = {width:"100%",background:"rgba(6,10,20,.9)",border:"1px solid #1e293b",color,
+    borderRadius:4,padding:"5px 8px",fontFamily:"monospace",fontSize:10,outline:"none"};
 
   return (
-    <div style={{background:"rgba(6,10,20,.9)",border:`1px solid ${status==="connected"?color+"33":"#0a0f1a"}`,borderRadius:8,padding:"9px 13px"}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+    <div style={{background:"rgba(6,10,20,.9)",border:`1px solid ${active?color+"33":"#0a0f1a"}`,borderRadius:8,padding:"9px 13px"}}>
+      <div style={{fontSize:7,color:"#1e293b",letterSpacing:".18em",marginBottom:6}}>КАРДИОДАТЧИК</div>
+      {/* Tab bar */}
+      <div style={{display:"flex",marginBottom:8}}>
+        <button style={tabS(tab==="ble")}    onClick={()=>setTab("ble")}>BLE ДАТЧИК</button>
+        <button style={tabS(tab==="manual")} onClick={()=>setTab("manual")}>ВРУЧНУЮ</button>
+      </div>
+
+      {tab==="ble" && (
         <div>
-          <div style={{fontSize:7,color:"#1e293b",letterSpacing:".18em"}}>КАРДИОДАТЧИК</div>
-          <div style={{fontSize:8.5,marginTop:2,color:status==="connected"?color:status==="connecting"?"#fbbf24":status==="error"?"#ef4444":"#334155"}}>
-            {status==="idle"?"Не подключён":status==="connecting"?"⏳ Подключение...":status==="connected"?`● BLE · ${bpm} уд/мин`:"❌ Ошибка BLE"}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div style={{fontSize:8.5,color:status==="connected"?color:status==="connecting"?"#fbbf24":status==="error"?"#ef4444":"#334155"}}>
+              {status==="idle"?"Не подключён":status==="connecting"?"⏳ Подключение…":status==="connected"?`● BLE · ${bpm} уд/мин`:"❌ Ошибка BLE"}
+            </div>
+            <div style={{display:"flex",gap:5,alignItems:"center"}}>
+              {status==="connected"
+                ? <div style={{textAlign:"right"}}>
+                    <div style={{fontFamily:"monospace",fontSize:11,color:qc}}>{rmssd.toFixed(0)}<span style={{fontSize:7.5,color:"#334155"}}> мс</span></div>
+                    <div style={{fontSize:7.5,color:qc}}>HRV: {ql}</div>
+                  </div>
+                : <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                    <button onClick={()=>connectBLE(false)} style={{background:"transparent",border:`1px solid ${color}44`,color,padding:"4px 12px",borderRadius:5,fontFamily:"monospace",fontSize:7.5,cursor:"pointer"}}>POLAR · H10 · GARMIN</button>
+                    <button onClick={()=>connectBLE(true)}  style={{background:"transparent",border:"1px solid #1e293b",color:"#475569",padding:"4px 12px",borderRadius:5,fontFamily:"monospace",fontSize:7.5,cursor:"pointer"}}>WAHOO · SUUNTO · ДРУГИЕ</button>
+                  </div>
+              }
+            </div>
           </div>
+          {status==="connected" && <div style={{marginTop:6,fontSize:7.5,color:"#1e293b",lineHeight:1.7}}>Биты адаптируются к RMSSD · φ-дыхание синхронизировано с когерентностью</div>}
+          <div style={{marginTop:5,fontSize:7,color:"#1e293b",lineHeight:1.6}}>Polar · H7/H10 · Garmin · Wahoo/TICKR · Suunto · XOSS · Magene · 4iiii · CooSpo · Movesense</div>
         </div>
-        <div style={{display:"flex",gap:10,alignItems:"center"}}>
-          {status==="connected" && (
-            <div style={{textAlign:"right"}}>
-              <div style={{fontFamily:"monospace",fontSize:11,color:qc}}>{rmssd.toFixed(0)}<span style={{fontSize:7.5,color:"#334155"}}> мс</span></div>
-              <div style={{fontSize:7.5,color:qc}}>HRV: {ql}</div>
+      )}
+
+      {tab==="manual" && (
+        <div>
+          <div style={{fontSize:7.5,color:"#334155",lineHeight:1.8,marginBottom:6}}>
+            Apple Watch · Garmin · Fitbit · Whoop → откройте приложение → найдите ВСР (HRV) и ЧСС → введите ниже
+          </div>
+          <div style={{display:"flex",gap:6,marginBottom:6}}>
+            <div style={{flex:1}}>
+              <div style={{fontSize:7,color:"#1e293b",marginBottom:3}}>ЧСС уд/мин</div>
+              <input type="number" value={manBpm} onChange={e=>setManBpm(e.target.value)}
+                placeholder="60" style={inputS}/>
+            </div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:7,color:"#1e293b",marginBottom:3}}>RMSSD мс</div>
+              <input type="number" value={manRmssd} onChange={e=>setManRmssd(e.target.value)}
+                placeholder="45" style={inputS}/>
+            </div>
+          </div>
+          <button onClick={applyManual} style={{width:"100%",background:"transparent",border:`1px solid ${color}44`,color,padding:"5px 0",borderRadius:5,fontFamily:"monospace",fontSize:8.5,letterSpacing:".1em",cursor:"pointer"}}>ПРИМЕНИТЬ</button>
+          {status==="manual" && (
+            <div style={{marginTop:6,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div style={{fontSize:8.5,color}}>● Ручной · {bpm} уд/мин</div>
+              <div style={{textAlign:"right"}}>
+                <div style={{fontFamily:"monospace",fontSize:11,color:qc}}>{rmssd.toFixed(0)}<span style={{fontSize:7.5,color:"#334155"}}> мс</span></div>
+                <div style={{fontSize:7.5,color:qc}}>HRV: {ql}</div>
+              </div>
             </div>
           )}
-          {status!=="connected" && (
-            <button onClick={connect} style={{background:"transparent",border:`1px solid ${color}44`,color,padding:"5px 14px",borderRadius:5,fontFamily:"monospace",fontSize:8.5,letterSpacing:".1em",cursor:"pointer"}}>CONNECT</button>
-          )}
         </div>
-      </div>
-      {status==="connected" && (
-        <div style={{marginTop:6,fontSize:7.5,color:"#1e293b",lineHeight:1.7}}>Биты адаптируются к RMSSD · φ-дыхание синхронизировано с когерентностью</div>
       )}
     </div>
   );
@@ -734,6 +967,74 @@ const CSS=`
 `;
 
 const base={minHeight:"100vh",background:"#020617",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",fontFamily:"'JetBrains Mono',monospace",color:"#e2e8f0",padding:"20px 14px",position:"relative"};
+
+// ─── InfoModal ────────────────────────────────────────────────────────────────
+const INFO_SECTIONS = [
+  {
+    title:"φ-ДЫХАНИЕ · Золотое сечение",
+    icon:"φ",
+    body:`Золотое сечение φ=1.618... пронизывает все биологические ритмы — от ДНК-спирали до сердечного ритма. Пропорция вдох:выдох 1:φ активирует парасимпатическую нервную систему, снижает кортизол, выравнивает давление.\n\nЦикл φ²+φ/π+φ³+φ = 8.99 с → 6.68 дыхания/мин — точка сердечной когерентности. Полный цикл φ⁵ минут = 11.09 мин совпадает с оптимальным HRV-тренировочным протоколом.`,
+  },
+  {
+    title:"7.83 Гц · Резонанс Шумана",
+    icon:"⊕",
+    body:`Основная частота электромагнитного резонанса полости Земля–ионосфера. Несущая аудио и биты согласованы с её гармониками: φ×7.83=12.67 Гц (граница α/β). 7.83/78=0.1 Гц — субгармоника, соответствующая шести дыханиям в минуту.\n\nСинхронизация дыхательного ритма с этим субгармоническим полем создаёт резонанс между ритмами тела и планеты. Биты φ²=2.62 Гц (θ-граница) усиливают эффект погружения.`,
+  },
+  {
+    title:"HRV · Сердечная когерентность",
+    icon:"♡",
+    body:`RMSSD — мера вариабельности сердечного ритма (разброс интервалов R-R). Высокий RMSSD = здоровая автономная НС, адаптивность к стрессу, эффективность восстановления.\n\nПриложение читает данные BLE-датчика и адаптирует все параметры:\n· Длительность фаз × hm = f(RMSSD)\n· Несущую −2 Гц при RMSSD>55\n· Биты ×0.92 при высоком HRV\n· Длину задержки в режиме ХАРД\nЦель: привести ритм дыхания к 0.1 Гц — резонансной частоте HRV.`,
+  },
+  {
+    title:"БИНАУРАЛЬНЫЕ БИТЫ · Аудио",
+    icon:"◎",
+    body:`Левое ухо: несущая (528 Гц — частота репарации ДНК). Правое ухо: несущая + биты. Мозг воспринимает разность как внутренний ритм и синхронизирует нейронную активность.\n\nφ×π=5.08 Гц → θ/α-граница (медитация, творчество). Розовый шум (−3 дБ/окт) маскирует внешние помехи и усиливает нейропластичность. Несущая и биты адаптируются к фазе луны, полу, времени суток и RMSSD.`,
+  },
+  {
+    title:"ЛАЙТ · Мягкая когерентность",
+    icon:"○",
+    body:`Формула: φ²:φ/π:φ³:φ (вдох:задержка:выдох:пауза).\n· Вдох φ²=2.62 с · Задержка φ/π=0.52 с · Выдох φ³=4.24 с · Пауза φ=1.62 с\n· Цикл 8.99 с → 6.68 BPM\n· Длительность сессии φ⁵ мин = 11.09 мин\n\nВсе фазы масштабируются коэффициентом hm=f(RMSSD) и пересчитываются заново перед каждым вдохом. Стохастический φ-джиттер ±3.1% предотвращает нейронную адаптацию.\n\nЭффект: активация блуждающего нерва, переход в α-состояние, снижение кортизола.`,
+  },
+  {
+    title:"НОРМ · Адаптивная φ-система",
+    icon:"◈",
+    body:`Полная мультифакторная адаптация. Учитывает:\n· Фазу луны (power 0.65–1.0) и её тип (новолуние→полнолуние)\n· Время суток (рассвет, утро, полдень, день, вечер, ночь)\n· RMSSD от BLE-датчика в реальном времени\n· Астрологический элемент знака зодиака\n· Ретроград Меркурия\n· Пол пользователя\n\nНесущая частота и биты также адаптивны. Каждый вдох пересчитывается с актуальным набором параметров.`,
+  },
+  {
+    title:"ХАРД · Метод Вим Хофа + φ",
+    icon:"⚡",
+    body:`Протокол: π×10=31 силовой вдох-выдох → задержка → восстановление × 3 раунда.\n\n· Силовые вдохи: φ²=2.62 с / φ=1.62 с (вдох длиннее выдоха — алкалоз)\n· Задержка: φ⁵×π×φ×hm ≈ 56×hm с (20–90 с, HRV-адаптивно)\n· Восстановление: φ³=4.24 с вдох + φ⁵=11.09 с задержка\n· φ-джиттер ±2.5% на силовых вдохах\n\nЭффект: алкалоз крови, выброс адреналина, активация симпатической НС, усиление иммунного ответа, расширение осознанности. Задержка адаптируется к HRV — чем выше резерв, тем длиннее.`,
+  },
+];
+
+function InfoModal({ onClose }) {
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,9,.92)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:"14px"}}
+      onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div style={{background:"#020617",border:"1px solid #0f172a",borderRadius:12,maxWidth:460,width:"100%",maxHeight:"86vh",overflowY:"auto",padding:"18px 16px",position:"relative"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,borderBottom:"1px solid #090e16",paddingBottom:10}}>
+          <div>
+            <div style={{fontSize:7,color:"#1e293b",letterSpacing:".25em"}}>HOMO SAPIENS OS</div>
+            <div style={{fontSize:12,fontWeight:700,color:"#e2e8f0",letterSpacing:".1em",marginTop:2}}>◈ МЕТОДОЛОГИЯ СИСТЕМЫ</div>
+          </div>
+          <button onClick={onClose} style={{background:"transparent",border:"none",color:"#334155",fontSize:16,cursor:"pointer",lineHeight:1}}>✕</button>
+        </div>
+        {INFO_SECTIONS.map((s,i)=>(
+          <div key={i} style={{marginBottom:14,paddingBottom:12,borderBottom:i<INFO_SECTIONS.length-1?"1px solid #090e16":"none"}}>
+            <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:5}}>
+              <span style={{fontSize:9,color:"#3de8a0",fontFamily:"monospace",opacity:.7}}>{s.icon}</span>
+              <div style={{fontSize:8.5,fontWeight:700,color:"#94a3b8",letterSpacing:".1em"}}>{s.title}</div>
+            </div>
+            <div style={{fontSize:7.5,color:"#475569",lineHeight:1.95,whiteSpace:"pre-line"}}>{s.body}</div>
+          </div>
+        ))}
+        <button onClick={onClose} style={{width:"100%",background:"transparent",border:"1px solid #1e293b",color:"#334155",padding:"8px",borderRadius:6,fontFamily:"monospace",fontSize:9,cursor:"pointer",letterSpacing:".15em",marginTop:4}}>
+          ЗАКРЫТЬ
+        </button>
+      </div>
+    </div>
+  );
+}
 
 // ─── MAIN ─────────────────────────────────────────────────────────────────────
 export default function HumanOS() {
@@ -757,16 +1058,22 @@ export default function HumanOS() {
   const [activeCheatCodes, setActiveCheatCodes] = useState({});   // { id: true } if applied
   const [cheatPending,     setCheatPending]     = useState({});   // selected but not yet applied
   const [winW,             setWinW]             = useState(window.innerWidth);
+  const [breathMode,       setBreathMode]       = useState("normal");
+  const [showInfo,         setShowInfo]         = useState(false);
 
-  const breathRef  = useRef({ phase:"rest" });
-  const rmssdRef   = useRef(0);
-  const audioRef   = useRef(null);
-  const pkgsRef    = useRef(null);
-  const tickRef    = useRef(null);
-  const breathTick = useRef(null);
-  const toastSent  = useRef(false);
-  const seenLines  = useRef(new Set());
-  const adaptRef   = useRef(adaptive);
+  const breathRef      = useRef({ phase:"rest" });
+  const rmssdRef       = useRef(0);
+  const audioRef       = useRef(null);
+  const pkgsRef        = useRef(null);
+  const tickRef        = useRef(null);
+  const breathTick     = useRef(null);
+  const toastSent      = useRef(false);
+  const seenLines      = useRef(new Set());
+  const adaptRef       = useRef(adaptive);
+  const wakeLockRef    = useRef(null);
+  const sessionDurRef  = useRef(0);
+  const sessionActiveRef = useRef(false);
+  const wimInfoRef     = useRef("");
 
   const gd = gender ? G[gender] : G.m;
 
@@ -779,54 +1086,97 @@ export default function HumanOS() {
     seenLines.current.add(l); setCL(p=>[...p,l]);
   }
 
-  function startBreath(seq) {
+  async function requestWakeLock() {
+    if (!("wakeLock" in navigator)) return;
+    try {
+      wakeLockRef.current = await navigator.wakeLock.request("screen");
+      wakeLockRef.current.addEventListener("release", ()=>{ wakeLockRef.current=null; });
+    } catch(e) {}
+  }
+  function releaseWakeLock() {
+    if (wakeLockRef.current) { wakeLockRef.current.release().catch(()=>{}); wakeLockRef.current=null; }
+  }
+
+  // seqOrFn: array (cyclic or one-shot) OR generator function (idx)=>step|null.
+  // Generator returning null → sequence done → calls onEnd.
+  function startBreath(seqOrFn, loop=true, onEnd=null) {
     let idx=0;
+    function getStep(i) {
+      if (typeof seqOrFn === "function") return seqOrFn(i);
+      const src = seqOrFn;
+      if (!loop && i >= src.length) return null;
+      return src[loop ? i % src.length : i];
+    }
     function step() {
-      const s=(seq||adaptRef.current?.breathSeq||[{phase:"inhale",dur:PHI**2},{phase:"hold",dur:PHI},{phase:"exhale",dur:PHI**3},{phase:"rest",dur:PHI**2}])[idx%4];
+      const s = getStep(idx);
+      if (!s) { if (onEnd) onEnd(); return; }
       breathRef.current.phase=s.phase;
       if (audioRef.current) audioRef.current.onBreath(s.phase, rmssdRef.current);
-      breathTick.current=setTimeout(step,s.dur*1000); idx++;
+      if (s.phase==="inhale")       vibrate(18);
+      else if (s.phase==="exhale")  vibrate(12);
+      if (s.info) wimInfoRef.current=s.info;
+      breathTick.current=setTimeout(step, s.dur*1000); idx++;
     }
     step();
   }
 
   function startSession() {
-    // _ensureCtx() MUST be the very first call — we're inside the button onClick
-    // gesture scope. This creates/resumes the AudioContext before anything else.
+    // _ensureCtx() MUST be the very first call — inside gesture scope.
     _ensureCtx();
     if (!pkgsRef.current) pkgsRef.current=gd.pkgs;
     const adp=getAdaptive(rmssdRef.current);
     setAdaptive(adp); adaptRef.current=adp;
     setStage("running"); setElapsed(0); setCL([]); setPkgP({});
     seenLines.current=new Set(); toastSent.current=false; setAudioOk(false);
+    sessionActiveRef.current=true; wimInfoRef.current="";
     audioRef.current=new AudioEngine();
     audioRef.current.start(adp.carrier, adp.beat, vol);
-    // Poll audio state — give ctx time to transition from suspended→running
+    // Wake lock (keeps screen on) + haptic start signal
+    requestWakeLock();
+    vibrate([80, 40, 80, 40, 160]);
+    // Poll audio state
     const checkAudio = () => {
       const ok = audioRef.current?.running && audioRef.current?.ctx?.state === "running";
       setAudioOk(ok);
     };
     setTimeout(checkAudio, 500);
-    setTimeout(checkAudio, 1500); // second check in case iOS was slow to resume
-    startBreath(adp.breathSeq);
+    setTimeout(checkAudio, 1500);
+    // Session duration & breath sequence based on mode
+    const isHard  = breathMode==="hard";
+    const isLight = breathMode==="light";
+    let dur;
+    if (isHard) {
+      // ХАРД: generate φ/π/HRV Wim Hof sequence at session start
+      const wh = makeWimHofGen(rmssdRef.current);
+      dur = wh.totalDur;
+      startBreath(wh.step, false, finishSession);
+    } else if (isLight) {
+      // ЛАЙТ: dynamic generator, re-evaluates RMSSD each breath
+      dur = PHI**5 * 60;                          // φ⁵ minutes = 11.09 min
+      startBreath(makeLightStep(rmssdRef));
+    } else {
+      // НОРМ: adaptive φ-system, reads adaptRef live each breath
+      dur = adp.totalMin * 60;
+      startBreath(makeNormStep(adaptRef, rmssdRef));
+    }
+    sessionDurRef.current = dur;
     const t0=Date.now();
     tickRef.current=setInterval(()=>{
       const el=(Date.now()-t0)/1000; setElapsed(el);
-      if (el>=adp.totalMin*60) {
-        clearInterval(tickRef.current); clearTimeout(breathTick.current);
-        if (audioRef.current) audioRef.current.stop();
-        const mods={}; pkgsRef.current.forEach(p=>{mods[p.mod]=Math.round(72+Math.random()*26);});
-        setMods(mods); setStage("done");
-      }
+      if (el>=dur) finishSession();
     },250);
     setTimeout(()=>gd.console_lines.slice(0,4).forEach(addLine), 600);
   }
 
   function finishSession() {
+    if (!sessionActiveRef.current) return; // guard against double-call
+    sessionActiveRef.current=false;
     clearInterval(tickRef.current); clearTimeout(breathTick.current);
     if (audioRef.current) audioRef.current.stop();
     const mods={}; (pkgsRef.current||[]).forEach(p=>{mods[p.mod]=Math.round(72+Math.random()*26);});
     setMods(mods); setStage("done");
+    releaseWakeLock();
+    vibrate([200, 80, 200, 80, 400]);
   }
 
   // Prewarm AudioContext on first touch so it's ready (but not required) by session start.
@@ -846,15 +1196,24 @@ export default function HumanOS() {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
+  // Re-acquire wake lock when tab becomes visible again (iOS releases it on hide)
+  useEffect(() => {
+    if (stage !== "running") return;
+    function onVisible() { if (document.visibilityState === "visible") requestWakeLock(); }
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [stage]);
+
   useEffect(()=>()=>{
     clearInterval(tickRef.current); clearTimeout(breathTick.current);
     if (audioRef.current) audioRef.current.stop();
+    releaseWakeLock();
   },[]);
 
   useEffect(()=>{
     if (stage!=="running") return;
     const adp=adaptRef.current; if (!adp) return;
-    const pct=elapsed/(adp.totalMin*60);
+    const pct=elapsed/(sessionDurRef.current||adp.totalMin*60);
     const li=Math.floor(pct*gd.console_lines.length*1.1);
     if (gd.console_lines[li]) addLine(gd.console_lines[li]);
     const ai=Math.floor(elapsed/(PHI**5))%gd.affirmation.length;
@@ -893,8 +1252,17 @@ export default function HumanOS() {
             </div>
           ))}
         </div>
-        <div style={{textAlign:"center",fontSize:8.5,color:"#fbbf24"}}>⚠ Установка работает только с открытыми глазами</div>
+        <div style={{textAlign:"center",fontSize:8.5,color:"#fbbf24",marginBottom:12}}>⚠ Установка работает только с открытыми глазами</div>
+        <div style={{textAlign:"center"}}>
+          <button onClick={()=>setShowInfo(true)}
+            style={{background:"transparent",border:"1px solid #1e293b",color:"#334155",padding:"6px 18px",borderRadius:5,fontFamily:"monospace",fontSize:8,letterSpacing:".15em",cursor:"pointer",transition:"color .2s"}}
+            onMouseEnter={e=>e.target.style.color="#94a3b8"}
+            onMouseLeave={e=>e.target.style.color="#334155"}>
+            ◈ О МЕТОДАХ И НАУЧНОЙ БАЗЕ
+          </button>
+        </div>
       </div>
+      {showInfo && <InfoModal onClose={()=>setShowInfo(false)}/>}
     </div>
   );
 
@@ -1001,6 +1369,41 @@ export default function HumanOS() {
               </div>
             ))}
           </div>
+          {/* ── Breath Mode Selector ── */}
+          <div style={{background:"rgba(8,14,26,.95)",border:`1px solid ${gd.color}1e`,borderRadius:8,padding:"11px 14px",marginBottom:11}}>
+            <div style={{fontSize:7,color:"#1e293b",letterSpacing:".18em",marginBottom:8}}>РЕЖИМ ДЫХАНИЯ:</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:7}}>
+              {[
+                {id:"light", label:"ЛАЙТ",  sub:`φ²:φ/π:φ³:φ`, tip:`φ⁵≈11 мин`},
+                {id:"normal",label:"НОРМ",  sub:"φ-адаптив",     tip:`${adaptive.totalMin} мин`},
+                {id:"hard",  label:"ХАРД",  sub:`π×10 вдохов`,   tip:"~10 мин"},
+              ].map(m=>(
+                <div key={m.id} onClick={()=>setBreathMode(m.id)}
+                  style={{background:breathMode===m.id?`${gd.color}15`:"transparent",border:`1px solid ${breathMode===m.id?gd.color:`${gd.color}22`}`,borderRadius:6,padding:"8px 4px",textAlign:"center",cursor:"pointer",transition:"all .2s"}}>
+                  <div style={{fontSize:10,fontWeight:700,color:breathMode===m.id?gd.color:"#475569",letterSpacing:".08em"}}>{m.label}</div>
+                  <div style={{fontSize:7,color:"#334155",marginTop:1}}>{m.sub}</div>
+                  <div style={{fontSize:6.5,color:"#1e293b",marginTop:1}}>{m.tip}</div>
+                </div>
+              ))}
+            </div>
+            {breathMode==="light"&&(
+              <div style={{marginTop:8,fontSize:7.5,color:`${gd.color}66`,lineHeight:1.9}}>
+                φ² вдох · φ/π задержка · φ³ выдох · φ пауза · цикл 8.99с · 6.7 BPM
+                {rmssdRef.current>0&&<span style={{color:gd.color}}> · hm={rmssdToHm(rmssdRef.current).toFixed(2)}</span>}
+              </div>
+            )}
+            {breathMode==="normal"&&(
+              <div style={{marginTop:8,fontSize:7.5,color:`${gd.color}66`,lineHeight:1.9}}>
+                Луна · время суток · зодиак · HRV · пол — все факторы адаптируют φ-ритм
+              </div>
+            )}
+            {breathMode==="hard"&&(
+              <div style={{marginTop:8,fontSize:7.5,color:"#fbbf2466",lineHeight:1.9}}>
+                3 раунда: π×10=31 вдох (φ²:φ) → задержка φ⁵πφ·hm с → φ³ вдох + φ⁵ удерж.
+                {rmssdRef.current>0&&<span style={{color:"#fbbf24"}}> · задержка≈{Math.round(Math.max(20,Math.min(90,PHI**5*PI*PHI*rmssdToHm(rmssdRef.current))))}с</span>}
+              </div>
+            )}
+          </div>
           <div style={{marginBottom:11}}>
             <HRVPanel onData={(r,b)=>{rmssdRef.current=r;setRD(r);const a=getAdaptive(r);setAdaptive(a);adaptRef.current=a;}} color={gd.color}/>
           </div>
@@ -1019,7 +1422,7 @@ export default function HumanOS() {
 
   // ── RUNNING ───────────────────────────────────────────────────────────────
   if (stage==="running") {
-    const totalDur=adaptive.totalMin*60;
+    const totalDur=sessionDurRef.current||adaptive.totalMin*60;
     const pct=Math.min(1,elapsed/totalDur);
     const rem=Math.max(0,totalDur-elapsed);
     const mm=String(Math.floor(rem/60)).padStart(2,"0");
@@ -1030,7 +1433,7 @@ export default function HumanOS() {
     const sideW   = Math.min(68, Math.floor(winW * 0.14));
     const orbSize = Math.max(180, Math.min(300, winW - sideW * 2 - 24));
     const marqueeH = orbSize + 90;
-    const affirmLines = AFFIRMATIONS_MARQUEE.split(" · ").filter(Boolean);
+    const affirmLines = AFFIRMATION_LINES;
     const leftLines  = [...gd.console_lines, ...affirmLines];
     const rightLines = [
       ...clLines,
@@ -1096,6 +1499,12 @@ export default function HumanOS() {
                 <div>бит {adaptive.beat.toFixed(2)} Hz</div>
                 <div style={{fontSize:7,color:"#283444"}}>{adaptive.tw}</div>
                 {rmssdDisp>0 && <div style={{color:gd.color}}>HRV {rmssdDisp}мс</div>}
+                <div style={{fontSize:7,color:gd.color,opacity:.7,letterSpacing:".1em"}}>
+                  {breathMode==="hard"?"⚡ ВИМ ХОФ":breathMode==="light"?"○ ЛАЙТ":"◈ φ-АДАПТ"}
+                </div>
+                {breathMode==="hard"&&wimInfoRef.current&&(
+                  <div style={{fontSize:6.5,color:"#fbbf2466",lineHeight:1.6}}>{wimInfoRef.current}</div>
+                )}
               </div>
             </div>
             {/* Right column: bottom→top vertical marquee */}
